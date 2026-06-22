@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "elrslang"
+version = "0.1.0"
+description = "A SlangPy-first realtime renderer prototype."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy>=1.26,<3",
+    "pillow>=10,<13",
+    "slangpy==0.40.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+scene = [
+    "pygltflib>=1.16",
+    "trimesh>=4",
+    "usd-core>=24",
+]
+
+[project.scripts]
+elrslang-viewer = "elrslang.viewer:main"
+elrslang-export-mobile = "elrslang.tools.export_mobile:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100

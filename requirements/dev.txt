@@ -1,0 +1,2 @@
+-r lock-py312-win64.txt
+-e .[dev,scene]

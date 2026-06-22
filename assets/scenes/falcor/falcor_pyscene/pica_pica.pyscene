@@ -1,0 +1,85 @@
+# Pica Pica Scene - Converted from Bevy Solari demo
+# Original: https://github.com/bevyengine/bevy/blob/main/examples/3d/solari.rs
+#
+# NOTE: glb files should be in meshes/ subdirectory
+
+# ============================================================================
+# Load main diorama scene
+# Note: Bevy scales this 10x, but Falcor importScene doesn't support transforms
+# Camera position is adjusted accordingly
+# ============================================================================
+sceneBuilder.importScene('meshes/mini_diorama_01.glb')
+
+# ============================================================================
+# Load robot model with transform
+# Bevy applies: position (-2.0, 0.05, -2.1), scale 2.0, rotation 90 deg Y
+# Since diorama is not scaled 10x, we adjust: position/10, scale = 2/10 = 0.2
+# ============================================================================
+
+# Record node count before importing robot
+nodeCountBeforeRobot = sceneBuilder.getNodeCount()
+
+# Import robot
+sceneBuilder.importScene('meshes/robot_01.glb')
+
+# Find and transform the robot's root nodes (nodes with no parent or parent outside robot)
+nodeCountAfterRobot = sceneBuilder.getNodeCount()
+for nodeID in range(nodeCountBeforeRobot, nodeCountAfterRobot):
+    parentID = sceneBuilder.getNodeParent(nodeID)
+    # Check if this is a root node of the imported model
+    # (parent is invalid or parent is from before import)
+    if parentID == kInvalidNodeID or parentID < nodeCountBeforeRobot:
+        # Apply transform: scale down significantly, position, rotation 90 deg Y
+        # Robot is way too big, try 0.02 scale
+        sceneBuilder.setNodeTransform(nodeID, Transform(
+            scaling=float3(0.01, 0.01, 0.01),
+            rotationEulerDeg=float3(-90, 0, 0),
+            translation=float3(-0.02, 0.0005, -0.021)
+        ))
+
+# ============================================================================
+# Adjust materials to match Bevy demo
+# ============================================================================
+
+# Try to get and modify the "Lights" material for robot emissive
+try:
+    lightsMat = sceneBuilder.getMaterial('Lights')
+    if lightsMat:
+        # Bevy: LinearRgba::from(Color::srgb(0.941, 0.714, 0.043)) * 1.0
+        lightsMat.emissiveColor = float3(0.941, 0.714, 0.043)
+        lightsMat.emissiveFactor = 1000.0
+except:
+    pass
+
+# Try to disable emissive on "material"
+try:
+    baseMat = sceneBuilder.getMaterial('material')
+    if baseMat:
+        baseMat.emissiveFactor = 0.0
+except:
+    pass
+
+# ============================================================================
+# Create camera
+# Original Bevy position divided by 10 (since scene is not scaled)
+# ============================================================================
+camera = Camera('MainCamera')
+camera.position = float3(0.022, 0.258, 0.697)
+camera.target = float3(0.009, 0.113, 0.219)
+camera.up = float3(0, 1, 0)
+camera.focalLength = 35.0
+sceneBuilder.addCamera(camera)
+
+# ============================================================================
+# Create directional light (sun)
+# Bevy: illuminance = FULL_DAYLIGHT (about 100000 lux)
+# Bevy rotation quaternion: (-0.13334629, -0.86597735, -0.3586996, 0.3219264)
+# Calculated light direction: approximately (0.46, -0.71, 0.54)
+# ============================================================================
+sunLight = DistantLight('Sun')
+# Direction vector (from quaternion rotation of -Z axis)
+sunLight.direction = float3(0.46, -0.71, 0.54)
+# FULL_DAYLIGHT intensity (scaled for Falcor)
+sunLight.intensity = float3(10.0, 10.0, 10.0)
+sunLight.angle = 0.53  # Sun angular diameter ~0.53 degrees
+sceneBuilder.addLight(sunLight)

@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import unittest
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from elrslang import Renderer, RendererConfig
+from elrslang.device import SlangPyUnavailable
+from elrslang.passes import FeatureUnavailable
+
+
+class GpuSmokeTests(unittest.TestCase):
+    def test_slangpy_preview_non_black(self):
+        self._assert_graph_non_black("slangpy_preview")
+
+    def test_raster_forward_non_black(self):
+        self._assert_graph_non_black("raster_forward")
+
+    def test_raster_forward_draws_falcor_teapot_mesh(self):
+        try:
+            renderer = Renderer(
+                RendererConfig(
+                    scene_path=ROOT / "assets" / "scenes" / "falcor" / "meshes" / "teapot.obj",
+                    graph_name="raster_forward",
+                    backend="automatic",
+                    width=64,
+                    height=64,
+                    interactive=False,
+                )
+            )
+            renderer.frame()
+        except (SlangPyUnavailable, FeatureUnavailable) as exc:
+            raise unittest.SkipTest(str(exc)) from exc
+        except RuntimeError as exc:
+            raise unittest.SkipTest(f"GPU smoke unavailable in this environment: {exc}") from exc
+
+        texture = renderer.context.resources.get("HardwareRasterForward.color")
+        if not hasattr(texture, "to_numpy"):
+            raise unittest.SkipTest("Texture readback is unavailable in this SlangPy backend.")
+        pixels = np.asarray(texture.to_numpy()).view(np.float32).reshape(64, 64, 4)
+        colored = np.any(pixels[:, :, :3] > 0.01, axis=2)
+        self.assertGreater(int(colored.sum()), 0)
+        self.assertLess(int(colored.sum()), colored.size)
+
+    def test_dxr_pathtrace_non_black_when_supported(self):
+        self._assert_graph_non_black("dxr_pathtrace")
+
+    def _assert_graph_non_black(self, graph_name: str) -> None:
+        try:
+            renderer = Renderer(
+                RendererConfig(
+                    graph_name=graph_name,
+                    backend="automatic",
+                    width=32,
+                    height=32,
+                    interactive=False,
+                )
+            )
+            renderer.frame()
+        except (SlangPyUnavailable, FeatureUnavailable) as exc:
+            raise unittest.SkipTest(str(exc)) from exc
+        except RuntimeError as exc:
+            raise unittest.SkipTest(f"GPU smoke unavailable in this environment: {exc}") from exc
+
+        output = renderer.context.output
+        if not hasattr(output, "to_numpy"):
+            raise unittest.SkipTest("Texture readback is unavailable in this SlangPy backend.")
+        pixels = np.asarray(output.to_numpy()).view(np.float32)
+        self.assertTrue(np.any(pixels != 0.0), f"{graph_name} produced an all-zero image")
+
+
+if __name__ == "__main__":
+    unittest.main()

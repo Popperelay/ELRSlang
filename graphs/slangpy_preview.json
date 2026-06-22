@@ -1,0 +1,41 @@
+{
+  "name": "slangpy_preview",
+  "passes": [
+    {
+      "name": "SceneUpload",
+      "type": "SceneUploadPass"
+    },
+    {
+      "name": "DebugView",
+      "type": "SlangFunctionPass",
+      "module": "preview.slang",
+      "function": "debug_view",
+      "inputs": ["scene"],
+      "outputs": ["color"],
+      "bindings": {
+        "pixel": {"generator": "call_id"},
+        "scene": {"input": "scene"},
+        "frame": {"special": "frame"}
+      },
+      "result": "color"
+    },
+    {
+      "name": "ToneMap",
+      "type": "ToneMapPass",
+      "output": "color"
+    },
+    {
+      "name": "Present",
+      "type": "PresentPass"
+    }
+  ],
+  "edges": [
+    {"from": "SceneUpload.scene", "to": "DebugView.scene"},
+    {"from": "DebugView.color", "to": "ToneMap.input"},
+    {"from": "ToneMap.color", "to": "Present.input"}
+  ],
+  "outputs": ["Present.presented"],
+  "settings": {
+    "description": "SlangPy function-call preview graph."
+  }
+}
