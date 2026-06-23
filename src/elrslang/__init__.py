@@ -10,19 +10,31 @@ from .render_graph import (
 )
 from .passes import (
     BuildAccelerationStructurePass,
+    ComputeFunctionPass,
     HardwareDXRPass,
     HardwareRasterPass,
-    PipelinePass,
     PresentPass,
     SceneUploadPass,
     SlangFunctionPass,
     ToneMapPass,
+)
+from .pipeline import FeatureUnavailable, PipelinePass
+from .raster_pipeline import (
+    DepthStencilDesc,
+    RasterDrawData,
+    RasterPipelineDesc,
+    RasterPipelinePass,
+    RasterTargetDesc,
+    RasterizerDesc,
 )
 from .scene import Camera, Light, Material, Mesh, MeshInstance, Scene, SceneLoader, SceneView
 
 __all__ = [
     "BuildAccelerationStructurePass",
     "Camera",
+    "ComputeFunctionPass",
+    "DepthStencilDesc",
+    "FeatureUnavailable",
     "GraphCompileError",
     "HardwareDXRPass",
     "HardwareRasterPass",
@@ -33,6 +45,11 @@ __all__ = [
     "PassReflection",
     "PipelinePass",
     "PresentPass",
+    "RasterDrawData",
+    "RasterPipelineDesc",
+    "RasterPipelinePass",
+    "RasterTargetDesc",
+    "RasterizerDesc",
     "RenderContext",
     "RenderGraph",
     "RenderPass",

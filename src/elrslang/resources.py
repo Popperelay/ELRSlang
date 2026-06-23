@@ -33,6 +33,10 @@ class ResourceRegistry:
         handle = self._items.get(name)
         return default if handle is None else handle.value
 
+    def describe(self, name: str) -> TextureDesc | None:
+        handle = self._items.get(name)
+        return None if handle is None else handle.desc
+
     def require(self, name: str) -> Any:
         if name not in self._items:
             raise KeyError(f"Resource `{name}` was not produced by the render graph.")

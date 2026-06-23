@@ -9,9 +9,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from elrslang.scene import Scene, SceneLoader
+from elrslang.scene import Material, Mesh, MeshInstance, Scene, SceneLoader
 from elrslang.scene_buffers import (
     RasterBakeSettings,
+    RasterDrawList,
     build_raster_scene_buffers,
     build_world_scene_buffers,
     raster_scene_cache_key,
@@ -60,6 +61,47 @@ class SceneBufferTests(unittest.TestCase):
         self.assertEqual(vertices.shape[1], 3)
         self.assertGreater(indices.size, 0)
         self.assertLess(int(indices.max()), vertices.shape[0])
+
+    def test_raster_draw_list_filters_meshes(self):
+        scene = Scene(
+            meshes=[
+                Mesh(
+                    name="RedMesh",
+                    positions=[(-0.8, -0.6, 0.0), (-0.1, -0.6, 0.0), (-0.45, 0.4, 0.0)],
+                    normals=[(0.0, 0.0, 1.0)] * 3,
+                    indices=[0, 1, 2],
+                    material_index=0,
+                ),
+                Mesh(
+                    name="GreenMesh",
+                    positions=[(0.1, -0.6, 0.0), (0.8, -0.6, 0.0), (0.45, 0.4, 0.0)],
+                    normals=[(0.0, 0.0, 1.0)] * 3,
+                    indices=[0, 1, 2],
+                    material_index=1,
+                ),
+            ],
+            materials=[
+                Material(name="RedMaterial", base_color=(1.0, 0.0, 0.0, 1.0)),
+                Material(name="GreenMaterial", base_color=(0.0, 1.0, 0.0, 1.0)),
+            ],
+            instances=[
+                MeshInstance(name="RedInstance", mesh_index=0),
+                MeshInstance(name="GreenInstance", mesh_index=1),
+            ],
+        )
+        settings = RasterBakeSettings(
+            64,
+            64,
+            (0.1, 0.2, 0.3, 1.0),
+            "falcor_diffuse",
+            RasterDrawList(meshes=("GreenMesh",)),
+        )
+
+        vertices, _ = build_raster_scene_buffers(scene, settings)
+        colors = vertices.reshape(-1, 7)[:, 3:6]
+
+        self.assertFalse(np.any(np.all(np.isclose(colors, (1.0, 0.0, 0.0)), axis=1)))
+        self.assertTrue(np.any(np.all(np.isclose(colors, (0.0, 1.0, 0.0)), axis=1)))
 
     def _assert_color_present(
         self, colors: np.ndarray, expected: tuple[float, float, float]

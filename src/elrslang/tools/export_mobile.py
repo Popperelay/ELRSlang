@@ -32,7 +32,8 @@ def export_mobile_assets(graph: str | Path, out_dir: Path, scene: str | Path | N
         {
             item["module"]
             for item in graph_data.get("passes", [])
-            if item.get("type") == "SlangFunctionPass" and "module" in item
+            if item.get("type") in {"SlangFunctionPass", "ComputeFunctionPass", "ComputePass"}
+            and "module" in item
         }
         | {
             item["shader"]

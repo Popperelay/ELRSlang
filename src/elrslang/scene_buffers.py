@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -15,11 +15,40 @@ FALCOR_DIFFUSE_MODES = frozenset({"falcor_diffuse", "diffuse_opacity", "albedo"}
 
 
 @dataclass(frozen=True)
+class RasterDrawList:
+    instances: tuple[str, ...] = ()
+    meshes: tuple[str, ...] = ()
+    materials: tuple[str, ...] = ()
+
+    @classmethod
+    def from_config(cls, config: Any | None) -> "RasterDrawList":
+        if config is None:
+            return cls()
+        if isinstance(config, cls):
+            return config
+        return cls(
+            instances=tuple(str(item) for item in config.get("instances", ())),
+            meshes=tuple(str(item) for item in config.get("meshes", ())),
+            materials=tuple(str(item) for item in config.get("materials", ())),
+        )
+
+    def includes(self, instance_name: str, mesh_name: str, material_name: str) -> bool:
+        if self.instances and instance_name not in self.instances:
+            return False
+        if self.meshes and mesh_name not in self.meshes:
+            return False
+        if self.materials and material_name not in self.materials:
+            return False
+        return True
+
+
+@dataclass(frozen=True)
 class RasterBakeSettings:
     width: int
     height: int
     fallback_color: Color4
     mode: str = "lit"
+    draw_list: RasterDrawList = field(default_factory=RasterDrawList)
 
     @property
     def aspect(self) -> float:
@@ -53,6 +82,9 @@ def raster_scene_cache_key(scene: Scene, settings: RasterBakeSettings) -> tuple[
         settings.mode,
         int(settings.width),
         int(settings.height),
+        settings.draw_list.instances,
+        settings.draw_list.meshes,
+        settings.draw_list.materials,
     )
 
 
@@ -70,6 +102,11 @@ def build_raster_scene_buffers(
         if not (0 <= instance.mesh_index < len(scene.meshes)):
             continue
         mesh = scene.meshes[instance.mesh_index]
+        material_name = ""
+        if 0 <= mesh.material_index < len(scene.materials):
+            material_name = scene.materials[mesh.material_index].name
+        if not settings.draw_list.includes(instance.name, mesh.name, material_name):
+            continue
         positions = mesh.position_array()
         normals = mesh.normal_array()
         indices = mesh.index_array().astype(np.uint32, copy=False).reshape(-1)

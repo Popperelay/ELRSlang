@@ -25,7 +25,7 @@
     },
     {
       "name": "Composite",
-      "type": "SlangFunctionPass",
+      "type": "ComputeFunctionPass",
       "module": "hybrid_composite.slang",
       "function": "hybrid_composite",
       "inputs": ["raster", "ray"],
