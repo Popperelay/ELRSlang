@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -37,6 +39,21 @@ class SceneLoaderTests(unittest.TestCase):
             scene = SceneLoader().load(path)
             self.assertEqual(len(scene.meshes), 1)
             self.assertEqual(scene.meshes[0].triangle_count, 2)
+
+    def test_falcor_quad_winding_matches_declared_normal(self):
+        scene = SceneLoader().load(ROOT / "assets" / "scenes" / "falcor" / "falcor_pyscene" / "cornell_box.pyscene")
+        floor = next(mesh for mesh in scene.meshes if mesh.name == "Quad")
+        positions = floor.position_array()
+        i0, i1, i2 = floor.index_array()[:3]
+        geometric_normal = np.cross(positions[i1] - positions[i0], positions[i2] - positions[i0])
+        geometric_normal = geometric_normal / np.linalg.norm(geometric_normal)
+        declared_normal = floor.normal_array()[0]
+        self.assertGreater(float(np.dot(geometric_normal, declared_normal)), 0.99)
+
+    def test_falcor_standard_material_default_base_color_is_white(self):
+        scene = SceneLoader().load(ROOT / "assets" / "scenes" / "falcor" / "falcor_pyscene" / "cornell_box.pyscene")
+        light = next(material for material in scene.materials if material.name == "Light")
+        self.assertEqual(light.base_color, (1.0, 1.0, 1.0, 1.0))
 
     def test_gltf_json_loader_reads_materials_cameras_and_lights(self):
         with tempfile.TemporaryDirectory() as tmp:

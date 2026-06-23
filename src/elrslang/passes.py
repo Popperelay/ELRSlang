@@ -181,15 +181,19 @@ class HardwareRasterPass(PipelinePass):
         shader: str | Path = "raster_forward.slang",
         output: str = "color",
         color: tuple[float, float, float, float] = (0.1, 0.45, 0.9, 1.0),
+        mode: str = "lit",
     ) -> None:
         super().__init__(name)
         self.shader = Path(shader)
         self.output = output
         self.color = color
+        self.mode = mode
         self._pipeline = None
         self._input_layout = None
         self._vertex_buffer = None
         self._index_buffer = None
+        self._depth_texture = None
+        self._depth_size: tuple[int, int] | None = None
         self._index_count = 0
         self._mesh_cache_key: tuple[Any, ...] | None = None
 
@@ -212,10 +216,12 @@ class HardwareRasterPass(PipelinePass):
             | spy.TextureUsage.render_target,
         )
         self._ensure_pipeline(context, spy)
+        self._ensure_depth_texture(context, spy)
         scene_view = inputs["scene"]
         self._ensure_scene_buffers(context, spy, scene_view.scene)
 
         command_encoder = context.device.create_command_encoder()
+        command_encoder.clear_texture_depth_stencil(self._depth_texture, depth_value=1.0)
         render_pass_desc = {
             "color_attachments": [
                 {
@@ -224,7 +230,12 @@ class HardwareRasterPass(PipelinePass):
                     "load_op": spy.LoadOp.clear,
                     "store_op": spy.StoreOp.store,
                 }
-            ]
+            ],
+            "depth_stencil_attachment": {
+                "view": self._depth_texture.create_view({}),
+                "depth_load_op": spy.LoadOp.load,
+                "depth_store_op": spy.StoreOp.store,
+            },
         }
         with command_encoder.begin_render_pass(render_pass_desc) as encoder:
             encoder.set_render_state(
@@ -271,8 +282,27 @@ class HardwareRasterPass(PipelinePass):
             input_layout=self._input_layout,
             primitive_topology=spy.PrimitiveTopology.triangle_list,
             targets=[{"format": spy.Format.rgba32_float}],
-            rasterizer={"cull_mode": spy.CullMode.none},
+            depth_stencil={
+                "format": spy.Format.d32_float,
+                "depth_test_enable": True,
+                "depth_write_enable": True,
+                "depth_func": spy.ComparisonFunc.less,
+            },
+            rasterizer={"cull_mode": spy.CullMode.back},
         )
+
+    def _ensure_depth_texture(self, context: RenderContext, spy) -> None:
+        size = (int(context.width), int(context.height))
+        if self._depth_texture is not None and self._depth_size == size:
+            return
+        self._depth_texture = context.device.create_texture(
+            format=spy.Format.d32_float,
+            width=context.width,
+            height=context.height,
+            usage=spy.TextureUsage.shader_resource | spy.TextureUsage.depth_stencil,
+            label=f"{self.name}.depth",
+        )
+        self._depth_size = size
 
     def _ensure_scene_buffers(self, context: RenderContext, spy, scene: Scene) -> None:
         scene.ensure_defaults()
@@ -283,13 +313,14 @@ class HardwareRasterPass(PipelinePass):
             tuple((material.name, material.base_color, material.emissive_color, material.emissive_factor) for material in scene.materials),
             tuple((camera.position, camera.target, camera.up, camera.vfov_degrees) for camera in scene.cameras),
             scene.selected_camera,
+            self.mode,
             context.width,
             context.height,
         )
         if self._mesh_cache_key == cache_key and self._vertex_buffer is not None:
             return
 
-        vertices, indices = build_raster_scene_buffers(scene, context.width, context.height, self.color)
+        vertices, indices = build_raster_scene_buffers(scene, context.width, context.height, self.color, self.mode)
 
         self._vertex_buffer = context.device.create_buffer(
             usage=spy.BufferUsage.shader_resource | spy.BufferUsage.vertex_buffer,
@@ -459,12 +490,13 @@ def build_raster_scene_buffers(
     width: int,
     height: int,
     fallback_color: tuple[float, float, float, float],
+    mode: str = "lit",
 ) -> tuple[np.ndarray, np.ndarray]:
     scene.ensure_defaults()
     camera = scene.active_camera
     aspect = float(width) / max(float(height), 1.0)
     view_projection = camera.projection_matrix(aspect) @ camera.view_matrix()
-    triangles: list[tuple[float, np.ndarray]] = []
+    triangles: list[np.ndarray] = []
     light = scene.lights[0] if scene.lights else None
 
     for instance in scene.instances:
@@ -490,11 +522,11 @@ def build_raster_scene_buffers(
             ndc = clip[:, :3] / safe_w
             if np.all(ndc[:, 0] < -1.5) or np.all(ndc[:, 0] > 1.5) or np.all(ndc[:, 1] < -1.5) or np.all(ndc[:, 1] > 1.5):
                 continue
-            color = shade_triangle(scene, mesh, tri_world, tri_normals, light, fallback_color)
+            color = shade_triangle(scene, mesh, tri_world, tri_normals, light, fallback_color, mode)
             tri_vertices = np.zeros((3, 7), dtype=np.float32)
             tri_vertices[:, 0:3] = ndc.astype(np.float32)
             tri_vertices[:, 3:7] = np.asarray(color, dtype=np.float32)
-            triangles.append((float(np.mean(ndc[:, 2])), tri_vertices))
+            triangles.append(tri_vertices)
 
     if not triangles:
         vertices = np.asarray(
@@ -507,8 +539,7 @@ def build_raster_scene_buffers(
         )
         return vertices.reshape(-1), np.arange(3, dtype=np.uint32)
 
-    triangles.sort(key=lambda item: item[0], reverse=True)
-    vertices = np.concatenate([item[1] for item in triangles], axis=0)
+    vertices = np.concatenate(triangles, axis=0)
     indices = np.arange(vertices.shape[0], dtype=np.uint32)
     return vertices.reshape(-1), indices
 
@@ -520,12 +551,16 @@ def shade_triangle(
     normals: np.ndarray,
     light: Any,
     fallback_color: tuple[float, float, float, float],
+    mode: str = "lit",
 ) -> tuple[float, float, float, float]:
     if 0 <= mesh.material_index < len(scene.materials):
         material = scene.materials[mesh.material_index]
     else:
         material = Material(base_color=fallback_color)
     base = np.asarray(material.base_color, dtype=np.float32)
+    if mode in {"falcor_diffuse", "diffuse_opacity", "albedo"}:
+        return (float(base[0]), float(base[1]), float(base[2]), 1.0)
+
     normal = normalize(np.mean(normals, axis=0), (0.0, 1.0, 0.0))
     lambert = 0.8
     light_color = np.ones(3, dtype=np.float32)
@@ -746,6 +781,7 @@ def _hardware_raster_from_config(config: Mapping[str, Any]) -> RenderPass:
         shader=config.get("shader", "raster_forward.slang"),
         output=config.get("output", "color"),
         color=tuple(config.get("color", (0.1, 0.45, 0.9, 1.0))),
+        mode=config.get("mode", "lit"),
     )
 
 

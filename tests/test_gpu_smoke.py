@@ -72,6 +72,10 @@ class GpuSmokeTests(unittest.TestCase):
         colored = np.any(pixels[:, :, :3] > 0.01, axis=2)
         self.assertGreater(int(colored.sum()), 0)
         self.assertLess(int(colored.sum()), colored.size)
+        self._assert_color_present(pixels, (0.63, 0.065, 0.05))
+        self._assert_color_present(pixels, (0.14, 0.45, 0.091))
+        self._assert_color_present(pixels, (0.725, 0.71, 0.68))
+        self._assert_color_present(pixels, (1.0, 1.0, 1.0))
 
     def test_dxr_pathtrace_non_black_when_supported(self):
         self._assert_graph_non_black("dxr_pathtrace")
@@ -101,6 +105,10 @@ class GpuSmokeTests(unittest.TestCase):
             raise unittest.SkipTest("Texture readback is unavailable in this SlangPy backend.")
         pixels = np.asarray(output.to_numpy()).view(np.float32)
         self.assertTrue(np.any(pixels != 0.0), f"{graph_name} produced an all-zero image")
+
+    def _assert_color_present(self, pixels: np.ndarray, color: tuple[float, float, float]) -> None:
+        matches = np.all(np.isclose(pixels[:, :, :3], color, atol=0.02), axis=2)
+        self.assertTrue(np.any(matches), f"Expected color {color} was not present in raster output")
 
 
 if __name__ == "__main__":

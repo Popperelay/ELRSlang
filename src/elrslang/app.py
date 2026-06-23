@@ -8,12 +8,12 @@ from typing import Callable
 from .device import DeviceConfig, create_slangpy_device, import_slangpy
 
 
-def write_texture_png(texture, spy, path: str | Path) -> None:
+def write_texture_png(texture, spy, path: str | Path, srgb_gamma: bool = False) -> None:
     bitmap = texture.to_bitmap()
     bitmap.convert(
         spy.Bitmap.PixelFormat.rgb,
         spy.Bitmap.ComponentType.uint8,
-        srgb_gamma=True,
+        srgb_gamma=srgb_gamma,
     ).write(str(path))
 
 

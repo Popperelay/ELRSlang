@@ -10,12 +10,8 @@
       "type": "HardwareRasterPass",
       "shader": "raster_forward.slang",
       "output": "color",
+      "mode": "falcor_diffuse",
       "color": [0.1, 0.45, 0.9, 1.0]
-    },
-    {
-      "name": "ToneMap",
-      "type": "ToneMapPass",
-      "output": "color"
     },
     {
       "name": "Present",
@@ -24,8 +20,7 @@
   ],
   "edges": [
     {"from": "SceneUpload.scene", "to": "HardwareRasterForward.scene"},
-    {"from": "HardwareRasterForward.color", "to": "ToneMap.input"},
-    {"from": "ToneMap.color", "to": "Present.input"}
+    {"from": "HardwareRasterForward.color", "to": "Present.input"}
   ],
   "outputs": ["Present.presented"],
   "settings": {

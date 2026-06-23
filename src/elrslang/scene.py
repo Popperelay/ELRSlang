@@ -414,7 +414,11 @@ class Material:
         }
 
 
-StandardMaterial = Material
+@dataclass
+class StandardMaterial(Material):
+    base_color: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
+
+
 PBRTDiffuseMaterial = Material
 
 
@@ -530,7 +534,7 @@ class TriangleMesh:
             ],
             normals=[(0.0, 1.0, 0.0)] * 4,
             uvs=[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
-            indices=[0, 1, 2, 0, 2, 3],
+            indices=[0, 2, 1, 0, 3, 2],
         )
         return cls(mesh)
 
