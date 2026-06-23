@@ -5,13 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-import numpy as np
-
 from .device import has_feature, import_slangpy
 from .paths import SHADER_DIR
 from .render_graph import PassReflection, RenderContext, RenderPass
 from .resources import TextureDesc
-from .scene import Camera, Material, Mesh, MeshInstance, Scene, matrix_to_numpy, normalize, transform_points
+from .scene import Scene
+from .scene_buffers import (
+    RasterBakeSettings,
+    build_raster_scene_buffers,
+    build_world_scene_buffers,
+    dxr_smoke_quad,
+    fit_mesh_to_screen,
+    raster_scene_cache_key,
+)
 
 
 class FeatureUnavailable(RuntimeError):
@@ -305,22 +311,12 @@ class HardwareRasterPass(PipelinePass):
         self._depth_size = size
 
     def _ensure_scene_buffers(self, context: RenderContext, spy, scene: Scene) -> None:
-        scene.ensure_defaults()
-        cache_key = (
-            scene.source_path,
-            tuple((mesh.name, mesh.vertex_count, len(mesh.indices), mesh.material_index) for mesh in scene.meshes),
-            tuple((instance.name, instance.mesh_index, instance.transform) for instance in scene.instances),
-            tuple((material.name, material.base_color, material.emissive_color, material.emissive_factor) for material in scene.materials),
-            tuple((camera.position, camera.target, camera.up, camera.vfov_degrees) for camera in scene.cameras),
-            scene.selected_camera,
-            self.mode,
-            context.width,
-            context.height,
-        )
+        settings = RasterBakeSettings(context.width, context.height, self.color, self.mode)
+        cache_key = raster_scene_cache_key(scene, settings)
         if self._mesh_cache_key == cache_key and self._vertex_buffer is not None:
             return
 
-        vertices, indices = build_raster_scene_buffers(scene, context.width, context.height, self.color, self.mode)
+        vertices, indices = build_raster_scene_buffers(scene, settings)
 
         self._vertex_buffer = context.device.create_buffer(
             usage=spy.BufferUsage.shader_resource | spy.BufferUsage.vertex_buffer,
@@ -485,122 +481,6 @@ class HardwareDXRPass(PipelinePass):
         )
 
 
-def build_raster_scene_buffers(
-    scene: Scene,
-    width: int,
-    height: int,
-    fallback_color: tuple[float, float, float, float],
-    mode: str = "lit",
-) -> tuple[np.ndarray, np.ndarray]:
-    scene.ensure_defaults()
-    camera = scene.active_camera
-    aspect = float(width) / max(float(height), 1.0)
-    view_projection = camera.projection_matrix(aspect) @ camera.view_matrix()
-    triangles: list[np.ndarray] = []
-    light = scene.lights[0] if scene.lights else None
-
-    for instance in scene.instances:
-        if not (0 <= instance.mesh_index < len(scene.meshes)):
-            continue
-        mesh = scene.meshes[instance.mesh_index]
-        positions = mesh.position_array()
-        normals = mesh.normal_array()
-        indices = mesh.index_array().astype(np.uint32, copy=False).reshape(-1)
-        model = matrix_to_numpy(instance.transform)
-        world_positions = transform_points(model, positions)
-        normal_matrix = np.linalg.pinv(model[:3, :3]).T
-        world_normals = np.asarray(normals @ normal_matrix.T, dtype=np.float32)
-        for i in range(0, len(indices) - 2, 3):
-            tri_indices = indices[i : i + 3]
-            tri_world = world_positions[tri_indices]
-            tri_normals = world_normals[tri_indices]
-            homogeneous = np.concatenate([tri_world, np.ones((3, 1), dtype=np.float32)], axis=1)
-            clip = homogeneous @ view_projection.T
-            if np.all(clip[:, 3] <= 1e-5):
-                continue
-            safe_w = np.where(np.abs(clip[:, 3:4]) > 1e-5, clip[:, 3:4], 1.0)
-            ndc = clip[:, :3] / safe_w
-            if np.all(ndc[:, 0] < -1.5) or np.all(ndc[:, 0] > 1.5) or np.all(ndc[:, 1] < -1.5) or np.all(ndc[:, 1] > 1.5):
-                continue
-            color = shade_triangle(scene, mesh, tri_world, tri_normals, light, fallback_color, mode)
-            tri_vertices = np.zeros((3, 7), dtype=np.float32)
-            tri_vertices[:, 0:3] = ndc.astype(np.float32)
-            tri_vertices[:, 3:7] = np.asarray(color, dtype=np.float32)
-            triangles.append(tri_vertices)
-
-    if not triangles:
-        vertices = np.asarray(
-            [
-                [-0.8, -0.7, 0.5, *fallback_color],
-                [0.8, -0.7, 0.5, *fallback_color],
-                [0.0, 0.8, 0.5, *fallback_color],
-            ],
-            dtype=np.float32,
-        )
-        return vertices.reshape(-1), np.arange(3, dtype=np.uint32)
-
-    vertices = np.concatenate(triangles, axis=0)
-    indices = np.arange(vertices.shape[0], dtype=np.uint32)
-    return vertices.reshape(-1), indices
-
-
-def shade_triangle(
-    scene: Scene,
-    mesh: Mesh,
-    positions: np.ndarray,
-    normals: np.ndarray,
-    light: Any,
-    fallback_color: tuple[float, float, float, float],
-    mode: str = "lit",
-) -> tuple[float, float, float, float]:
-    if 0 <= mesh.material_index < len(scene.materials):
-        material = scene.materials[mesh.material_index]
-    else:
-        material = Material(base_color=fallback_color)
-    base = np.asarray(material.base_color, dtype=np.float32)
-    if mode in {"falcor_diffuse", "diffuse_opacity", "albedo"}:
-        return (float(base[0]), float(base[1]), float(base[2]), 1.0)
-
-    normal = normalize(np.mean(normals, axis=0), (0.0, 1.0, 0.0))
-    lambert = 0.8
-    light_color = np.ones(3, dtype=np.float32)
-    if light is not None:
-        if light.kind in {"directional", "distant"}:
-            light_dir = -np.asarray(light.direction, dtype=np.float32)
-        else:
-            light_dir = np.asarray(light.position, dtype=np.float32) - np.mean(positions, axis=0)
-        light_dir = normalize(light_dir, (0.0, 1.0, 0.0))
-        light_color_tuple, intensity = light.color_intensity()
-        light_color = np.asarray(light_color_tuple, dtype=np.float32) * min(float(intensity), 10.0)
-        lambert = max(float(np.dot(normal, light_dir)), 0.0)
-    shaded = base[:3] * (0.22 + 0.78 * lambert) * np.clip(light_color, 0.0, 4.0)
-    emissive = np.asarray(material.emissive_color, dtype=np.float32) * float(material.emissive_factor)
-    shaded = np.clip(shaded + emissive, 0.0, 20.0)
-    return (float(shaded[0]), float(shaded[1]), float(shaded[2]), float(base[3]))
-
-
-def build_world_scene_buffers(scene: Scene) -> tuple[np.ndarray, np.ndarray]:
-    scene.ensure_defaults()
-    vertices: list[np.ndarray] = []
-    indices: list[np.ndarray] = []
-    vertex_offset = 0
-    for instance in scene.instances:
-        if not (0 <= instance.mesh_index < len(scene.meshes)):
-            continue
-        mesh = scene.meshes[instance.mesh_index]
-        world_positions = transform_points(instance.transform, mesh.position_array()).astype(np.float32)
-        mesh_indices = mesh.index_array().astype(np.uint32, copy=False).reshape(-1)
-        if mesh_indices.size == 0:
-            mesh_indices = np.arange(world_positions.shape[0], dtype=np.uint32)
-        vertices.append(world_positions)
-        indices.append(mesh_indices + vertex_offset)
-        vertex_offset += world_positions.shape[0]
-    if not vertices:
-        default = Scene.default()
-        return build_world_scene_buffers(default)
-    return np.concatenate(vertices, axis=0).astype(np.float32), np.concatenate(indices, axis=0).astype(np.uint32)
-
-
 def create_texture(context: RenderContext, spy, key: str, fmt_name: str = "rgba32_float", usage=None):
     existing = context.resources.get(key)
     if existing is not None:
@@ -633,45 +513,6 @@ def build_acceleration_structure(device, spy, inputs, label: str, keepalive: lis
     if keepalive is not None:
         keepalive.append(scratch)
     return accel
-
-
-def dxr_smoke_quad() -> tuple[np.ndarray, np.ndarray]:
-    vertices = np.array(
-        [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
-        dtype=np.float32,
-    )
-    indices = np.array([0, 1, 2, 1, 3, 2], dtype=np.uint32)
-    return vertices, indices
-
-
-def fit_mesh_to_screen(positions: np.ndarray) -> np.ndarray:
-    source = np.asarray(positions, dtype=np.float32).reshape(-1, 3)
-    if source.size == 0:
-        return np.asarray(
-            [(-0.8, -0.7, 0.0), (0.8, -0.7, 0.0), (0.0, 0.8, 0.0)],
-            dtype=np.float32,
-        )
-
-    bounds_min = source.min(axis=0)
-    bounds_max = source.max(axis=0)
-    extents = bounds_max - bounds_min
-    axes = (0, 1)
-    if extents[1] < max(extents[0], extents[2]) * 0.05 and extents[2] > 0:
-        axes = (0, 2)
-
-    projected = source[:, axes]
-    projected_min = projected.min(axis=0)
-    projected_max = projected.max(axis=0)
-    center = (projected_min + projected_max) * 0.5
-    scale = float(np.max(projected_max - projected_min))
-    if scale <= 1e-8:
-        scale = 1.0
-
-    normalized = (projected - center) * (1.7 / scale)
-    vertices = np.zeros((source.shape[0], 3), dtype=np.float32)
-    vertices[:, 0:2] = normalized
-    vertices[:, 2] = 0.0
-    return vertices.reshape(-1)
 
 
 def resolve_shader_path(path: str | Path, extra_paths: list[Path]) -> Path:
