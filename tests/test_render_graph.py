@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from elrslang.passes import pass_from_config
-from elrslang.render_graph import GraphCompileError, PassReflection, RenderContext, RenderGraph, RenderPass
+from elrslang.render_graph import GraphCompileError, PassReflection, RenderContext, RenderGraph, RenderPass, ResourceDesc
 from elrslang.renderer import load_graph
 
 
@@ -61,9 +61,17 @@ class RenderGraphTests(unittest.TestCase):
             graph.compile()
 
     def test_builtin_graphs_compile(self):
-        for name in ("slangpy_preview", "raster_forward", "dxr_pathtrace"):
+        for name in ("slangpy_preview", "raster_forward", "dxr_pathtrace", "hybrid_debug"):
             graph = load_graph(name)
             self.assertTrue(graph.compile())
+
+    def test_pass_reflection_accepts_resource_descriptors(self):
+        reflection = PassReflection.from_iterables(
+            outputs=("color",),
+            resources={"color": ResourceDesc(kind="texture", format="rgba32_float", persistent=True)},
+        )
+        self.assertIn("color", reflection.outputs)
+        self.assertTrue(reflection.resources["color"].persistent)
 
     def test_slang_function_pass_requires_fields(self):
         with self.assertRaisesRegex(ValueError, "missing fields"):

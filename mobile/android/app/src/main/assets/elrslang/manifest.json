@@ -1,0 +1,12 @@
+{
+  "schema": "dev.elrslang.mobile_asset_pack.v1",
+  "graph": "graph.json",
+  "scene": "scene.json",
+  "shaders": [
+    "shaders/dxr_pathtrace.slang",
+    "shaders/hybrid_composite.slang",
+    "shaders/raster_forward.slang"
+  ],
+  "host": "native",
+  "python": false
+}

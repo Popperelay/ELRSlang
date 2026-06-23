@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
+import time
 from typing import Any, Callable, Iterable, Mapping
 
 from .resources import ResourceRegistry
@@ -33,10 +34,21 @@ class ResourceRef:
 
 
 @dataclass(frozen=True)
+class ResourceDesc:
+    kind: str = "texture"
+    format: str | None = None
+    width: int | None = None
+    height: int | None = None
+    persistent: bool = False
+    internal: bool = False
+
+
+@dataclass(frozen=True)
 class PassReflection:
     inputs: frozenset[str] = field(default_factory=frozenset)
     outputs: frozenset[str] = field(default_factory=frozenset)
     optional_inputs: frozenset[str] = field(default_factory=frozenset)
+    resources: Mapping[str, ResourceDesc] = field(default_factory=dict)
 
     @classmethod
     def from_iterables(
@@ -44,8 +56,14 @@ class PassReflection:
         inputs: Iterable[str] = (),
         outputs: Iterable[str] = (),
         optional_inputs: Iterable[str] = (),
+        resources: Mapping[str, ResourceDesc] | None = None,
     ) -> "PassReflection":
-        return cls(frozenset(inputs), frozenset(outputs), frozenset(optional_inputs))
+        return cls(
+            frozenset(inputs),
+            frozenset(outputs),
+            frozenset(optional_inputs),
+            dict(resources or {}),
+        )
 
 
 @dataclass
@@ -66,6 +84,7 @@ class RenderContext:
     resources: ResourceRegistry = field(default_factory=ResourceRegistry)
     frame: FrameState = field(default_factory=FrameState)
     output: Any = None
+    timings: dict[str, float] = field(default_factory=dict)
 
     def frame_constants(self) -> dict[str, Any]:
         return {
@@ -96,6 +115,8 @@ class RenderGraph:
         self._edges: list[tuple[ResourceRef, ResourceRef]] = []
         self._outputs: list[ResourceRef] = []
         self._compiled_order: list[str] = []
+        self.settings: dict[str, Any] = {}
+        self._external_inputs: dict[ResourceRef, Any] = {}
 
     @property
     def passes(self) -> Mapping[str, RenderPass]:
@@ -116,6 +137,12 @@ class RenderGraph:
     def mark_output(self, endpoint: str) -> None:
         self._outputs.append(ResourceRef.parse(endpoint))
 
+    def set_input(self, endpoint: str, value: Any) -> None:
+        self._external_inputs[ResourceRef.parse(endpoint)] = value
+
+    def output_names(self) -> tuple[str, ...]:
+        return tuple(output.key() for output in self._outputs)
+
     def compile(self) -> list[str]:
         self._validate_edges()
         self._validate_required_inputs()
@@ -129,9 +156,13 @@ class RenderGraph:
             self.compile()
 
         edge_inputs: dict[str, dict[str, Any]] = {name: {} for name in self._passes}
+        for ref, value in self._external_inputs.items():
+            edge_inputs.setdefault(ref.pass_name, {})[ref.resource_name] = value
         for pass_name in self._compiled_order:
             render_pass = self._passes[pass_name]
+            start = time.perf_counter()
             produced = render_pass.execute(context, edge_inputs[pass_name])
+            context.timings[pass_name] = time.perf_counter() - start
             for output_name, value in produced.items():
                 context.resources.set(f"{pass_name}.{output_name}", value)
             for source, destination in self._edges:
@@ -154,6 +185,7 @@ class RenderGraph:
         graph_path = Path(path)
         data = json.loads(graph_path.read_text(encoding="utf-8"))
         graph = cls(data.get("name", graph_path.stem))
+        graph.settings = dict(data.get("settings", {}))
         for item in data.get("passes", []):
             graph.add_pass(pass_factory(item))
         for edge in data.get("edges", []):

@@ -6,6 +6,7 @@ pillow==12.2.0
 pytest==9.1.1
 pygltflib==1.16.5
 trimesh==4.12.2
+ufbx==0.0.5
 usd-core==26.5
 dataclasses-json==0.6.7
 marshmallow==3.26.2

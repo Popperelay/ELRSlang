@@ -39,4 +39,6 @@ struct SceneView
     uint materialCount;
     uint lightCount;
     Camera camera;
+    float3 boundsMin;
+    float3 boundsMax;
 };

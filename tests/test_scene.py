@@ -84,6 +84,60 @@ class SceneLoaderTests(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_falcor_pyscene_cornell_box_builds_procedural_scene(self):
+        scene = SceneLoader().load(ROOT / "assets" / "scenes" / "falcor" / "falcor_pyscene" / "cornell_box.pyscene")
+        self.assertGreaterEqual(len(scene.meshes), 8)
+        self.assertGreaterEqual(len(scene.instances), 8)
+        self.assertGreaterEqual(len(scene.materials), 8)
+        self.assertEqual(scene.cameras[0].name, "DefaultCamera")
+        self.assertGreater(scene.meshes[0].triangle_count, 0)
+
+    def test_falcor_pyscene_import_scene_merges_gltf_assets(self):
+        scene = SceneLoader().load(ROOT / "assets" / "scenes" / "falcor" / "cesium_man" / "CesiumMan.pyscene")
+        self.assertGreaterEqual(len(scene.meshes), 1)
+        self.assertGreaterEqual(len(scene.instances), 1)
+        self.assertGreaterEqual(len(scene.cameras), 1)
+        self.assertIsNotNone(scene.env_map)
+
+    def test_fbx_loader_reads_binary_falcor_asset(self):
+        scene = SceneLoader().load(ROOT / "assets" / "scenes" / "falcor" / "animated_cubes" / "animated_cubes.fbx")
+        self.assertEqual(len(scene.meshes), 6)
+        self.assertEqual(len(scene.instances), 6)
+        self.assertEqual(scene.metadata["generator"], "ufbx")
+        self.assertGreater(scene.meshes[0].triangle_count, 0)
+
+    def test_falcor_pyscene_animated_cubes_uses_script_cameras(self):
+        scene = SceneLoader().load(ROOT / "assets" / "scenes" / "falcor" / "animated_cubes" / "animated_cubes.pyscene")
+        self.assertEqual(len(scene.meshes), 6)
+        self.assertEqual(len(scene.instances), 6)
+        self.assertEqual([camera.name for camera in scene.cameras], ["FrontCamera", "BackCamera"])
+        self.assertEqual(scene.active_camera.name, "FrontCamera")
+
+    def test_falcor_pyscene_texture_lod_scene_uses_relative_assets(self):
+        scene = SceneLoader().load(ROOT / "assets" / "scenes" / "falcor" / "tex_lod" / "spheres_cube.pyscene")
+        self.assertGreaterEqual(len(scene.meshes), 5)
+        self.assertGreaterEqual(len(scene.lights), 4)
+        self.assertTrue(any(material.texture_paths for material in scene.materials))
+
+    def test_falcor_pyscene_curves_custom_primitives(self):
+        scene = SceneLoader().load(ROOT / "assets" / "scenes" / "falcor" / "curves" / "two_curves.pyscene")
+        self.assertGreaterEqual(len(scene.meshes), 5)
+        self.assertGreaterEqual(len(scene.instances), 7)
+        self.assertGreaterEqual(len(scene.cameras), 1)
+
+    def test_falcor_pyscene_bunny_reference_resolves(self):
+        scene = SceneLoader().load(ROOT / "assets" / "scenes" / "falcor" / "falcor_pyscene" / "bunny.pyscene")
+        self.assertGreaterEqual(len(scene.meshes), 2)
+        self.assertGreaterEqual(len(scene.instances), 2)
+        self.assertGreaterEqual(len(scene.cameras), 1)
+
+    def test_falcor_pyscene_pica_pica_imports_media_ext_assets(self):
+        scene = SceneLoader().load(ROOT / "assets" / "scenes" / "falcor" / "falcor_pyscene" / "pica_pica.pyscene")
+        self.assertGreaterEqual(len(scene.meshes), 10)
+        self.assertGreaterEqual(len(scene.instances), 10)
+        self.assertGreaterEqual(len(scene.materials), 2)
+        self.assertGreaterEqual(len(scene.lights), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

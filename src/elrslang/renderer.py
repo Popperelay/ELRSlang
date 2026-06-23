@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .app import ELRApp
+from .camera import FirstPersonCameraController, FrameTimer
 from .device import DeviceBackend, DeviceConfig, create_slangpy_device
 from .paths import GRAPH_DIR, SHADER_DIR
 from .passes import pass_from_config
@@ -19,6 +20,7 @@ class FrameStats:
     frame_index: int
     graph_name: str
     output: Any
+    timings: dict[str, float] | None = None
 
 
 @dataclass
@@ -38,6 +40,8 @@ class Renderer:
         self.config = config
         self.scene = SceneLoader().load(config.scene_path)
         self.app = None
+        self.camera_controller = None
+        self._timer = FrameTimer()
         device_config = DeviceConfig(backend=config.backend, enable_debug=config.enable_debug)
         if config.interactive:
             self.app = ELRApp(
@@ -47,6 +51,9 @@ class Renderer:
                 include_paths=[SHADER_DIR],
             )
             self.device = self.app.device
+            self.camera_controller = FirstPersonCameraController(speed=max(self.scene.camera_speed, 0.1))
+            self.app.on_keyboard_event = self.camera_controller.on_keyboard_event
+            self.app.on_mouse_event = self.camera_controller.on_mouse_event
         else:
             self.device = create_slangpy_device(device_config, include_paths=[SHADER_DIR])
         self.graph = load_graph(config.graph_name)
@@ -63,6 +70,8 @@ class Renderer:
     def load_scene(self, path: str | Path | None) -> None:
         self.scene = SceneLoader().load(path)
         self.context.scene = self.scene
+        if self.camera_controller is not None:
+            self.camera_controller.speed = max(self.scene.camera_speed, 0.1)
 
     def load_graph(self, name_or_path: str | Path) -> None:
         self.graph = load_graph(name_or_path)
@@ -71,12 +80,18 @@ class Renderer:
         if self.app is not None:
             self.context.width = self.app.width
             self.context.height = self.app.height
+        dt = self._timer.tick(self.app is not None)
+        self.context.frame.time_seconds += dt
+        if self.camera_controller is not None:
+            self.camera_controller.update(self.scene.active_camera, dt)
         self.context.resources.clear_transient()
+        self.context.timings.clear()
         self.graph.execute(self.context)
         return FrameStats(
             frame_index=self.context.frame.frame_index - 1,
             graph_name=self.graph.name,
             output=self.context.output,
+            timings=dict(self.context.timings),
         )
 
 

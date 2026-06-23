@@ -1,0 +1,154 @@
+{
+  "schema": "dev.elrslang.scene.v1",
+  "source": "G:\\J_Pan\\Code\\Mine\\ELRSlang\\assets\\scenes\\falcor\\falcor_pyscene\\cornell_box.pyscene",
+  "meshCount": 8,
+  "instanceCount": 8,
+  "materialCount": 8,
+  "lightCount": 1,
+  "cameraCount": 1,
+  "meshes": [
+    {
+      "name": "Quad",
+      "vertexCount": 4,
+      "triangleCount": 2,
+      "materialIndex": 0
+    },
+    {
+      "name": "Quad",
+      "vertexCount": 4,
+      "triangleCount": 2,
+      "materialIndex": 1
+    },
+    {
+      "name": "Quad",
+      "vertexCount": 4,
+      "triangleCount": 2,
+      "materialIndex": 2
+    },
+    {
+      "name": "Quad",
+      "vertexCount": 4,
+      "triangleCount": 2,
+      "materialIndex": 3
+    },
+    {
+      "name": "Quad",
+      "vertexCount": 4,
+      "triangleCount": 2,
+      "materialIndex": 4
+    },
+    {
+      "name": "Cube",
+      "vertexCount": 24,
+      "triangleCount": 12,
+      "materialIndex": 5
+    },
+    {
+      "name": "Cube",
+      "vertexCount": 24,
+      "triangleCount": 12,
+      "materialIndex": 6
+    },
+    {
+      "name": "Quad",
+      "vertexCount": 4,
+      "triangleCount": 2,
+      "materialIndex": 7
+    }
+  ],
+  "materials": [
+    {
+      "name": "Floor",
+      "baseColor": [
+        0.725,
+        0.71,
+        0.68,
+        1.0
+      ]
+    },
+    {
+      "name": "Ceiling",
+      "baseColor": [
+        0.725,
+        0.71,
+        0.68,
+        1.0
+      ]
+    },
+    {
+      "name": "Back Wall",
+      "baseColor": [
+        0.725,
+        0.71,
+        0.68,
+        1.0
+      ]
+    },
+    {
+      "name": "Left Wall",
+      "baseColor": [
+        0.63,
+        0.065,
+        0.05,
+        1.0
+      ]
+    },
+    {
+      "name": "Right Wall",
+      "baseColor": [
+        0.14,
+        0.45,
+        0.091,
+        1.0
+      ]
+    },
+    {
+      "name": "Large Box",
+      "baseColor": [
+        0.725,
+        0.71,
+        0.68,
+        1.0
+      ]
+    },
+    {
+      "name": "Small Box",
+      "baseColor": [
+        0.725,
+        0.71,
+        0.68,
+        1.0
+      ]
+    },
+    {
+      "name": "Light",
+      "baseColor": [
+        0.8,
+        0.8,
+        0.8,
+        1.0
+      ]
+    }
+  ],
+  "lights": [
+    {
+      "name": "KeyLight",
+      "kind": "directional"
+    }
+  ],
+  "cameras": [
+    {
+      "name": "DefaultCamera",
+      "position": [
+        0.0,
+        0.28,
+        1.2
+      ],
+      "target": [
+        0.0,
+        0.28,
+        0.0
+      ]
+    }
+  ]
+}

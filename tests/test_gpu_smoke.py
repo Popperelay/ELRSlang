@@ -47,8 +47,37 @@ class GpuSmokeTests(unittest.TestCase):
         self.assertGreater(int(colored.sum()), 0)
         self.assertLess(int(colored.sum()), colored.size)
 
+    def test_raster_forward_draws_falcor_pyscene(self):
+        try:
+            renderer = Renderer(
+                RendererConfig(
+                    scene_path=ROOT / "assets" / "scenes" / "falcor" / "falcor_pyscene" / "cornell_box.pyscene",
+                    graph_name="raster_forward",
+                    backend="automatic",
+                    width=64,
+                    height=64,
+                    interactive=False,
+                )
+            )
+            renderer.frame()
+        except (SlangPyUnavailable, FeatureUnavailable) as exc:
+            raise unittest.SkipTest(str(exc)) from exc
+        except RuntimeError as exc:
+            raise unittest.SkipTest(f"GPU smoke unavailable in this environment: {exc}") from exc
+
+        texture = renderer.context.resources.get("HardwareRasterForward.color")
+        if not hasattr(texture, "to_numpy"):
+            raise unittest.SkipTest("Texture readback is unavailable in this SlangPy backend.")
+        pixels = np.asarray(texture.to_numpy()).view(np.float32).reshape(64, 64, 4)
+        colored = np.any(pixels[:, :, :3] > 0.01, axis=2)
+        self.assertGreater(int(colored.sum()), 0)
+        self.assertLess(int(colored.sum()), colored.size)
+
     def test_dxr_pathtrace_non_black_when_supported(self):
         self._assert_graph_non_black("dxr_pathtrace")
+
+    def test_hybrid_debug_non_black_when_supported(self):
+        self._assert_graph_non_black("hybrid_debug")
 
     def _assert_graph_non_black(self, graph_name: str) -> None:
         try:

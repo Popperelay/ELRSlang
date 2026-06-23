@@ -22,6 +22,18 @@ class ExportMobileTests(unittest.TestCase):
             self.assertTrue((out_dir / "graph.json").exists())
             self.assertTrue((out_dir / "shaders" / "preview.slang").exists())
 
+    def test_export_mobile_assets_writes_scene_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "asset_pack"
+            scene = ROOT / "assets" / "scenes" / "falcor" / "falcor_pyscene" / "cornell_box.pyscene"
+            manifest_path = export_mobile_assets("raster_forward", out_dir, scene)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["scene"], "scene.json")
+            scene_manifest = json.loads((out_dir / "scene.json").read_text(encoding="utf-8"))
+            self.assertGreaterEqual(scene_manifest["meshCount"], 8)
+            self.assertEqual(scene_manifest["instanceCount"], len(scene_manifest["meshInstances"]))
+            self.assertIn("transform", scene_manifest["meshInstances"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

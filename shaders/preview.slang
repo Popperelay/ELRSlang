@@ -23,6 +23,8 @@ struct SceneView
     uint materialCount;
     uint lightCount;
     Camera camera;
+    float3 boundsMin;
+    float3 boundsMax;
 };
 
 float4 debug_view(int2 pixel, SceneView scene, FrameConstants frame)

@@ -1,0 +1,65 @@
+{
+  "name": "hybrid_debug",
+  "passes": [
+    {
+      "name": "SceneUpload",
+      "type": "SceneUploadPass"
+    },
+    {
+      "name": "HardwareRasterForward",
+      "type": "HardwareRasterPass",
+      "shader": "raster_forward.slang",
+      "output": "color",
+      "color": [0.1, 0.45, 0.9, 1.0]
+    },
+    {
+      "name": "BuildAS",
+      "type": "BuildAccelerationStructurePass",
+      "output": "tlas"
+    },
+    {
+      "name": "HardwareDXRTrace",
+      "type": "HardwareDXRPass",
+      "shader": "dxr_pathtrace.slang",
+      "output": "color"
+    },
+    {
+      "name": "Composite",
+      "type": "SlangFunctionPass",
+      "module": "hybrid_composite.slang",
+      "function": "hybrid_composite",
+      "inputs": ["raster", "ray"],
+      "outputs": ["color"],
+      "bindings": {
+        "pixel": {"generator": "call_id"},
+        "rasterColor": {"input": "raster"},
+        "rayColor": {"input": "ray"},
+        "samplerState": {"special": "sampler"},
+        "frame": {"special": "frame"}
+      },
+      "result": "color"
+    },
+    {
+      "name": "ToneMap",
+      "type": "ToneMapPass",
+      "output": "color"
+    },
+    {
+      "name": "Present",
+      "type": "PresentPass"
+    }
+  ],
+  "edges": [
+    {"from": "SceneUpload.scene", "to": "HardwareRasterForward.scene"},
+    {"from": "SceneUpload.scene", "to": "BuildAS.scene"},
+    {"from": "BuildAS.tlas", "to": "HardwareDXRTrace.tlas"},
+    {"from": "HardwareRasterForward.color", "to": "Composite.raster"},
+    {"from": "HardwareDXRTrace.color", "to": "Composite.ray"},
+    {"from": "Composite.color", "to": "ToneMap.input"},
+    {"from": "ToneMap.color", "to": "Present.input"}
+  ],
+  "outputs": ["Present.presented"],
+  "settings": {
+    "description": "Hybrid raster + hardware ray tracing debug graph."
+  }
+}

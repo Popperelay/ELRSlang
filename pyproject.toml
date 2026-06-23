@@ -21,6 +21,7 @@ dev = [
 scene = [
     "pygltflib>=1.16",
     "trimesh>=4",
+    "ufbx>=0.0.5",
     "usd-core>=24",
 ]
 

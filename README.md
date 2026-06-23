@@ -1,137 +1,121 @@
 # ELRSlang
 
-ELRSlang 是一个 SlangPy-first 的实时渲染器原型。首版目标是用 Python/SlangPy 快速搭建 PC 端可运行的 viewer，同时把 shader、资源 manifest 和 render graph 设计成可被 Android Vulkan 原生 smoke app 复用的形态。
+ELRSlang 是一个 SlangPy-first 的实时渲染器原型。PC 端用 Python/SlangPy 作为快速迭代 host，shader、graph 和 scene manifest 设计成可以被 Android Vulkan 原生 smoke app 复用的资源 contract。
 
 ## 当前能力
 
-- `RenderPass` / `RenderGraph`：参考 Falcor 的 pass/graph 思路，支持 graph JSON、依赖编译、循环检测、资源边检查和顺序执行。
-- `SlangFunctionPass`：默认 pass 类型，直接调用 `.slang` 函数，使用 SlangPy 的 `_result`、`call_id()`、dict `_type`、broadcasting 等能力减少 CPU 侧 glue code。
-- `PipelinePass`：为必须使用固定管线的硬件光栅化和硬件光追保留扩展点。
-- `HardwareRasterPass`：首版实现为 SlangPy render pipeline 绘制场景中的第一个 mesh，并自动居中缩放到屏幕。
-- `BuildAccelerationStructurePass` / `HardwareDXRPass`：实现 BLAS/TLAS 构建和 SlangPy ray tracing 调用骨架，按设备 feature gate 执行。
-- 场景导入：内置 OBJ 和最小 glTF JSON 解析；FBX、GLB、USD 识别为可选依赖路径。
-- Android smoke：提供 Android Vulkan 原生工程骨架，不运行 Python/SlangPy host，复用导出的 graph/shader/resource contract。
+- `RenderPass` / `RenderGraph`：参考 Falcor 的 pass/graph 思路，支持 graph JSON、依赖编译、循环检测、资源边检查、graph settings、external input、输出枚举和基础 pass timing。
+- `SlangFunctionPass`：直接调用 `.slang` 函数，使用 SlangPy 的 `_result`、`call_id()`、dict `_type` 等能力减少 CPU 侧 glue code。
+- `HardwareRasterPass`：使用 SlangPy render pipeline 绘制完整 scene instances，支持 camera view/projection、材质基础色、简单 Lambert/unlit 混合和 `.pyscene` procedural mesh。
+- `BuildAccelerationStructurePass` / `HardwareDXRPass`：把 scene instances 烘成 world-space geometry，构建 BLAS/TLAS，并从 camera 发射 primary rays 做硬件 ray tracing smoke。
+- `hybrid_debug` graph：同时跑 raster 和 DXR，再用 Slang function pass 做 composite，验证混合渲染共享同一份 scene contract。
+- 场景导入：支持 OBJ、glTF/GLB、FBX(`ufbx` 后端)、USD(`usd-core` 后端) 和 Falcor `.pyscene` 兼容层。
+- Falcor `.pyscene`：支持常见 `sceneBuilder`、`Camera`、`Transform`、`TriangleMesh`、`Material`/`StandardMaterial`、`EnvMap`、light、`float3/float4` 等白名单 API；不执行任意 Python import/open/eval/exec。
+- Viewer：支持 headless frames、交互窗口、F2 截图、W/A/S/D + mouse look 漫游、per-pass timing 输出。
+- Android smoke：原生 Vulkan app 会检查 Vulkan instance，并尝试读取导出的 `assets/elrslang/manifest.json` 和 `graph.json`。
 
 ## 稳定安装
 
-稳定方案固定为 Windows x64 + CPython 3.12 + `slangpy==0.40.1`。不要用 Python 3.14 作为可复现安装环境，因为当前 `slangpy 0.40.1` 没有可用的 cp314 wheel。
+稳定方案固定为 Windows x64 + CPython 3.12 + `slangpy==0.40.1`。不要用 Python 3.14 作为可复现环境，因为当前 `slangpy 0.40.1` 没有可用的 cp314 wheel。
 
-先安装 CPython 3.12 x64。推荐用 Windows 自带的 `winget`：
+推荐安装 Python 3.12：
 
 ```powershell
 winget install --id Python.Python.3.12 -e --scope user --accept-package-agreements --accept-source-agreements
 ```
 
-安装完成后，关闭并重新打开 PowerShell。
-
-如果你的机器没有 `winget`，请从 Python 官网安装 Windows x86-64 installer，并在安装时勾选 `Add python.exe to PATH`：
-
-```text
-https://www.python.org/downloads/release/python-31210/
-```
-
-然后在仓库根目录运行 bootstrap。它会创建 `.venv`、安装锁定依赖、检查 SlangPy 版本、运行单元测试和三条 renderer smoke：
+安装完成后，关闭并重新打开 PowerShell。然后在仓库根目录运行：
 
 ```powershell
 cd G:\J_Pan\Code\Mine\ELRSlang
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap.ps1
 ```
 
-如果 Python 3.12 已经安装，但不在 PATH，可以直接传 `python.exe` 的完整路径：
+如果 Python 3.12 已经安装但不在 `PATH`：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap.ps1 -PythonExe "C:\Users\<you>\AppData\Local\Programs\Python\Python312\python.exe"
 ```
 
-如果希望脚本尝试用 `winget` 安装 Python 3.12：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap.ps1 -InstallPython
-```
-
-如果只想安装依赖、不跑 GPU smoke：
+只安装依赖、不跑 GPU smoke：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap.ps1 -SkipSmoke
 ```
 
-如果环境装乱了，可以重建：
+环境装乱后重建：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap.ps1 -Recreate
 ```
 
-## 测试
+## 运行
 
-```powershell
-.\.venv\Scripts\python -m unittest discover -s tests
-.\.venv\Scripts\python -m compileall src tests
-```
-
-也可以直接运行：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
-```
-
-## 运行 viewer
-
-离屏跑一帧 smoke：
+Headless smoke：
 
 ```powershell
 .\.venv\Scripts\python -m elrslang.viewer --frames 1 --graph slangpy_preview --backend automatic --width 32 --height 32
 .\.venv\Scripts\python -m elrslang.viewer --frames 1 --graph raster_forward --backend automatic --width 32 --height 32
 .\.venv\Scripts\python -m elrslang.viewer --frames 1 --graph dxr_pathtrace --backend automatic --width 32 --height 32
+.\.venv\Scripts\python -m elrslang.viewer --frames 1 --graph hybrid_debug --backend automatic --width 32 --height 32
 ```
 
-如果看到类似下面的日志，但命令最后显示 `Rendered 1 frame(s)...` 并返回退出码 0，就表示运行成功：
+加载 Falcor `.pyscene`：
+
+```powershell
+.\.venv\Scripts\python -m elrslang.viewer --frames 1 --scene "G:\J_Pan\Code\Mine\ELRSlang\assets\scenes\falcor\falcor_pyscene\cornell_box.pyscene" --graph raster_forward --backend automatic --width 64 --height 64 --print-timings
+```
+
+打开交互窗口：
+
+```powershell
+.\.venv\Scripts\python -m elrslang.viewer --scene "G:\J_Pan\Code\Mine\ELRSlang\assets\scenes\falcor\falcor_pyscene\cornell_box.pyscene" --graph raster_forward --backend automatic --width 1280 --height 720
+```
+
+交互控制：
+
+- `W/A/S/D`：前后左右移动
+- `Q/E`：上下移动
+- `Shift`：加速
+- `Ctrl`：减速
+- 右键拖拽：mouse look
+- `F2`：截图
+- `Esc`：关闭窗口
+
+常见 warning：
 
 ```text
 [WARN] Cannot enable D3D12 Agility SDK...
-[INFO] (rhi) layer: CreateDevice: Debug layer is enabled.
 ```
 
-这个 warning 来自 SlangPy/D3D12 Agility SDK：当前 Python 安装在 `C:`，项目和 SlangPy wheel 在 `G:`，两者不在同一个盘符。它会影响 Agility SDK 加载提示，但不代表 renderer 失败。
+如果命令最后显示 `Rendered 1 frame(s)...` 并返回退出码 0，这个 warning 可以忽略。它通常来自 Python 安装盘符和 SlangPy/D3D12 Agility SDK 所在盘符不同。
 
-打开交互式窗口：
+## 测试
 
 ```powershell
-.\.venv\Scripts\python -m elrslang.viewer --graph slangpy_preview --backend automatic --width 1280 --height 720
+.\.venv\Scripts\python -m compileall src tests
+.\.venv\Scripts\python -m unittest discover -s tests
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke.ps1
 ```
 
-加载场景：
+## 导出 Android 资源
 
 ```powershell
-.\.venv\Scripts\python -m elrslang.viewer --scene path\to\scene.obj --graph raster_forward --backend automatic
+.\.venv\Scripts\python -m elrslang.tools.export_mobile --graph hybrid_debug --scene "G:\J_Pan\Code\Mine\ELRSlang\assets\scenes\falcor\falcor_pyscene\cornell_box.pyscene" --out mobile\android\app\src\main\assets\elrslang
 ```
 
-可用 graph：
+导出结果包含：
 
-- `slangpy_preview`：用 Slang 函数直接生成 debug view，适合快速验证 SlangPy 数据绑定。
-- `raster_forward`：使用硬件 render pipeline 画全屏 quad，并经过 tonemap/present。
-- `dxr_pathtrace`：构建 acceleration structure 后调用 SlangPy ray tracing；如果设备缺少 `acceleration_structure` 或 `ray_tracing` feature，会给出明确错误。
+- `manifest.json`
+- `graph.json`
+- `scene.json`
+- `shaders/*.slang`
 
-## 导出 Android smoke 资源
-
-```powershell
-.\.venv\Scripts\python -m elrslang.tools.export_mobile --graph slangpy_preview --out mobile\android\app\src\main\assets\elrslang
-```
-
-Android 工程位于 `mobile/android`。首版只提供 Vulkan smoke app 骨架和资源 contract，不承诺与 PC renderer feature parity。
-
-## Android 构建
-
-需要本机安装 Android SDK、NDK 和 Gradle：
-
-```powershell
-cd mobile\android
-gradle :app:assembleDebug
-```
-
-当前这台机器没有检测到 `gradle`、`ANDROID_HOME` 或 `ANDROID_SDK_ROOT`，所以 Android assemble 尚未在本机验证。
+Android 工程位于 `mobile/android`。当前本机没有检测到 `gradle`，因此 Android assemble 尚未在本机验证。
 
 ## 设计边界
 
 - SlangPy-first 不等于所有渲染都走软件模拟：全屏、compute、后处理和数据转换 pass 优先直接调用 Slang 函数；硬件 raster/DXR 仍走 SlangPy 暴露的底层 graphics/ray tracing API。
-- Android 首版不嵌入 Python，也不运行 SlangPy host。
-- FBX、GLB、USD 的完整材质/动画兼容依赖后续导入器完善；当前首版先建立可扩展接口和明确错误。
+- `.pyscene` v1 是受控 Falcor 兼容层，目标是常见 scene construction 脚本和仓库内样例，不承诺执行任意 Python。
+- Android 不嵌入 Python，也不运行 SlangPy host；它消费 PC 侧导出的 baked graph/shader/scene contract。
+- 当前 raster/DXR 是基础闭环，不是完整 PBR renderer；后续可以在同一 scene contract 上扩展 GBuffer、material system、shadow、denoise、TAA 等功能。

@@ -11,11 +11,18 @@ from .device import has_feature, import_slangpy
 from .paths import SHADER_DIR
 from .render_graph import PassReflection, RenderContext, RenderPass
 from .resources import TextureDesc
-from .scene import Scene
+from .scene import Camera, Material, Mesh, MeshInstance, Scene, matrix_to_numpy, normalize, transform_points
 
 
 class FeatureUnavailable(RuntimeError):
     pass
+
+
+PASS_REGISTRY: dict[str, Any] = {}
+
+
+def register_pass_type(pass_type: str, factory: Any) -> None:
+    PASS_REGISTRY[pass_type] = factory
 
 
 class SceneUploadPass(RenderPass):
@@ -166,7 +173,7 @@ class PipelinePass(RenderPass):
 
 
 class HardwareRasterPass(PipelinePass):
-    """Minimal hardware raster pass for the first mesh in the scene."""
+    """Hardware raster pass that draws all scene instances with simple material colors."""
 
     def __init__(
         self,
@@ -206,7 +213,7 @@ class HardwareRasterPass(PipelinePass):
         )
         self._ensure_pipeline(context, spy)
         scene_view = inputs["scene"]
-        self._ensure_scene_mesh(context, spy, scene_view.scene)
+        self._ensure_scene_buffers(context, spy, scene_view.scene)
 
         command_encoder = context.device.create_command_encoder()
         render_pass_desc = {
@@ -231,10 +238,6 @@ class HardwareRasterPass(PipelinePass):
             )
             shader_object = encoder.bind_pipeline(self._pipeline)
             cursor = spy.ShaderCursor(shader_object)
-            cursor.vert_offset = spy.float2(0.0, 0.0)
-            cursor.vert_scale = spy.float2(1.0, 1.0)
-            cursor.vert_z = 0.0
-            cursor.frag_color = spy.float4(*self.color)
             encoder.draw_indexed({"vertex_count": self._index_count})
         context.device.submit_command_buffer(command_encoder.finish())
         return {self.output: target}
@@ -249,9 +252,15 @@ class HardwareRasterPass(PipelinePass):
                     "semantic_index": 0,
                     "format": spy.Format.rgb32_float,
                     "offset": 0,
+                },
+                {
+                    "semantic_name": "COLOR",
+                    "semantic_index": 0,
+                    "format": spy.Format.rgba32_float,
+                    "offset": 12,
                 }
             ],
-            vertex_streams=[{"stride": 12}],
+            vertex_streams=[{"stride": 28}],
         )
         shader_path = resolve_shader_path(self.shader, context.shader_paths)
         program = context.device.load_program(
@@ -265,33 +274,31 @@ class HardwareRasterPass(PipelinePass):
             rasterizer={"cull_mode": spy.CullMode.none},
         )
 
-    def _ensure_scene_mesh(self, context: RenderContext, spy, scene: Scene) -> None:
+    def _ensure_scene_buffers(self, context: RenderContext, spy, scene: Scene) -> None:
         scene.ensure_defaults()
-        mesh = scene.meshes[0] if scene.meshes else Scene.default().meshes[0]
         cache_key = (
             scene.source_path,
-            mesh.name,
-            mesh.vertex_count,
-            len(mesh.indices),
+            tuple((mesh.name, mesh.vertex_count, len(mesh.indices), mesh.material_index) for mesh in scene.meshes),
+            tuple((instance.name, instance.mesh_index, instance.transform) for instance in scene.instances),
+            tuple((material.name, material.base_color, material.emissive_color, material.emissive_factor) for material in scene.materials),
+            tuple((camera.position, camera.target, camera.up, camera.vfov_degrees) for camera in scene.cameras),
+            scene.selected_camera,
             context.width,
             context.height,
         )
         if self._mesh_cache_key == cache_key and self._vertex_buffer is not None:
             return
 
-        vertices = fit_mesh_to_screen(mesh.position_array())
-        indices = mesh.index_array().astype(np.uint32, copy=False).reshape(-1)
-        if indices.size == 0:
-            indices = np.arange(vertices.shape[0], dtype=np.uint32)
+        vertices, indices = build_raster_scene_buffers(scene, context.width, context.height, self.color)
 
         self._vertex_buffer = context.device.create_buffer(
             usage=spy.BufferUsage.shader_resource | spy.BufferUsage.vertex_buffer,
-            label=f"{self.name}.{mesh.name}.vertex_buffer",
+            label=f"{self.name}.scene.vertex_buffer",
             data=vertices,
         )
         self._index_buffer = context.device.create_buffer(
             usage=spy.BufferUsage.shader_resource | spy.BufferUsage.index_buffer,
-            label=f"{self.name}.{mesh.name}.index_buffer",
+            label=f"{self.name}.scene.index_buffer",
             data=indices,
         )
         self._index_count = int(indices.size)
@@ -316,12 +323,7 @@ class BuildAccelerationStructurePass(PipelinePass):
 
         scene_view = inputs["scene"]
         scene = scene_view.scene
-        if scene.source_path is None:
-            vertices, indices = dxr_smoke_quad()
-        else:
-            mesh = scene.meshes[0] if scene.meshes else Scene.default().meshes[0]
-            vertices = mesh.position_array().astype(np.float32)
-            indices = mesh.index_array().astype(np.uint32)
+        vertices, indices = build_world_scene_buffers(scene)
 
         vertex_buffer = context.device.create_buffer(
             usage=spy.BufferUsage.shader_resource | spy.BufferUsage.acceleration_structure_build_input,
@@ -353,14 +355,6 @@ class BuildAccelerationStructurePass(PipelinePass):
         self._keepalive.append(blas)
         instance_list = context.device.create_acceleration_structure_instance_list(1)
         transform = spy.float3x4.identity()
-        if scene.source_path is None:
-            scale = spy.float3(max(float(context.width) * 0.5 - 0.9, 1.0), max(float(context.height) * 0.5 - 0.9, 1.0), 1.0)
-            transform = spy.float3x4(
-                spy.math.mul(
-                    spy.math.matrix_from_translation(spy.float3(-0.05, -0.05, 1.0)),
-                    spy.math.matrix_from_scaling(scale),
-                )
-            )
         instance_list.write(
             0,
             {
@@ -422,6 +416,14 @@ class HardwareDXRPass(PipelinePass):
             cursor = spy.ShaderCursor(shader_object)
             cursor.rt_tlas = inputs["tlas"]
             cursor.rt_render_texture = target
+            camera = (context.scene or Scene.default()).active_camera
+            forward, right, up = camera.basis()
+            cursor.rt_camera_position = spy.float3(*camera.position)
+            cursor.rt_camera_forward = spy.float3(*[float(v) for v in forward])
+            cursor.rt_camera_right = spy.float3(*[float(v) for v in right])
+            cursor.rt_camera_up = spy.float3(*[float(v) for v in up])
+            cursor.rt_camera_vfov_degrees = float(camera.vfov_degrees)
+            cursor.rt_resolution = spy.float2(float(context.width), float(context.height))
             pass_encoder.dispatch_rays(0, [context.width, context.height, 1])
         context.device.submit_command_buffer(command_encoder.finish())
         return {self.output: target}
@@ -450,6 +452,118 @@ class HardwareDXRPass(PipelinePass):
             miss_entry_points=["rt_miss"],
             hit_group_names=["hit_group"],
         )
+
+
+def build_raster_scene_buffers(
+    scene: Scene,
+    width: int,
+    height: int,
+    fallback_color: tuple[float, float, float, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    scene.ensure_defaults()
+    camera = scene.active_camera
+    aspect = float(width) / max(float(height), 1.0)
+    view_projection = camera.projection_matrix(aspect) @ camera.view_matrix()
+    triangles: list[tuple[float, np.ndarray]] = []
+    light = scene.lights[0] if scene.lights else None
+
+    for instance in scene.instances:
+        if not (0 <= instance.mesh_index < len(scene.meshes)):
+            continue
+        mesh = scene.meshes[instance.mesh_index]
+        positions = mesh.position_array()
+        normals = mesh.normal_array()
+        indices = mesh.index_array().astype(np.uint32, copy=False).reshape(-1)
+        model = matrix_to_numpy(instance.transform)
+        world_positions = transform_points(model, positions)
+        normal_matrix = np.linalg.pinv(model[:3, :3]).T
+        world_normals = np.asarray(normals @ normal_matrix.T, dtype=np.float32)
+        for i in range(0, len(indices) - 2, 3):
+            tri_indices = indices[i : i + 3]
+            tri_world = world_positions[tri_indices]
+            tri_normals = world_normals[tri_indices]
+            homogeneous = np.concatenate([tri_world, np.ones((3, 1), dtype=np.float32)], axis=1)
+            clip = homogeneous @ view_projection.T
+            if np.all(clip[:, 3] <= 1e-5):
+                continue
+            safe_w = np.where(np.abs(clip[:, 3:4]) > 1e-5, clip[:, 3:4], 1.0)
+            ndc = clip[:, :3] / safe_w
+            if np.all(ndc[:, 0] < -1.5) or np.all(ndc[:, 0] > 1.5) or np.all(ndc[:, 1] < -1.5) or np.all(ndc[:, 1] > 1.5):
+                continue
+            color = shade_triangle(scene, mesh, tri_world, tri_normals, light, fallback_color)
+            tri_vertices = np.zeros((3, 7), dtype=np.float32)
+            tri_vertices[:, 0:3] = ndc.astype(np.float32)
+            tri_vertices[:, 3:7] = np.asarray(color, dtype=np.float32)
+            triangles.append((float(np.mean(ndc[:, 2])), tri_vertices))
+
+    if not triangles:
+        vertices = np.asarray(
+            [
+                [-0.8, -0.7, 0.5, *fallback_color],
+                [0.8, -0.7, 0.5, *fallback_color],
+                [0.0, 0.8, 0.5, *fallback_color],
+            ],
+            dtype=np.float32,
+        )
+        return vertices.reshape(-1), np.arange(3, dtype=np.uint32)
+
+    triangles.sort(key=lambda item: item[0], reverse=True)
+    vertices = np.concatenate([item[1] for item in triangles], axis=0)
+    indices = np.arange(vertices.shape[0], dtype=np.uint32)
+    return vertices.reshape(-1), indices
+
+
+def shade_triangle(
+    scene: Scene,
+    mesh: Mesh,
+    positions: np.ndarray,
+    normals: np.ndarray,
+    light: Any,
+    fallback_color: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    if 0 <= mesh.material_index < len(scene.materials):
+        material = scene.materials[mesh.material_index]
+    else:
+        material = Material(base_color=fallback_color)
+    base = np.asarray(material.base_color, dtype=np.float32)
+    normal = normalize(np.mean(normals, axis=0), (0.0, 1.0, 0.0))
+    lambert = 0.8
+    light_color = np.ones(3, dtype=np.float32)
+    if light is not None:
+        if light.kind in {"directional", "distant"}:
+            light_dir = -np.asarray(light.direction, dtype=np.float32)
+        else:
+            light_dir = np.asarray(light.position, dtype=np.float32) - np.mean(positions, axis=0)
+        light_dir = normalize(light_dir, (0.0, 1.0, 0.0))
+        light_color_tuple, intensity = light.color_intensity()
+        light_color = np.asarray(light_color_tuple, dtype=np.float32) * min(float(intensity), 10.0)
+        lambert = max(float(np.dot(normal, light_dir)), 0.0)
+    shaded = base[:3] * (0.22 + 0.78 * lambert) * np.clip(light_color, 0.0, 4.0)
+    emissive = np.asarray(material.emissive_color, dtype=np.float32) * float(material.emissive_factor)
+    shaded = np.clip(shaded + emissive, 0.0, 20.0)
+    return (float(shaded[0]), float(shaded[1]), float(shaded[2]), float(base[3]))
+
+
+def build_world_scene_buffers(scene: Scene) -> tuple[np.ndarray, np.ndarray]:
+    scene.ensure_defaults()
+    vertices: list[np.ndarray] = []
+    indices: list[np.ndarray] = []
+    vertex_offset = 0
+    for instance in scene.instances:
+        if not (0 <= instance.mesh_index < len(scene.meshes)):
+            continue
+        mesh = scene.meshes[instance.mesh_index]
+        world_positions = transform_points(instance.transform, mesh.position_array()).astype(np.float32)
+        mesh_indices = mesh.index_array().astype(np.uint32, copy=False).reshape(-1)
+        if mesh_indices.size == 0:
+            mesh_indices = np.arange(world_positions.shape[0], dtype=np.uint32)
+        vertices.append(world_positions)
+        indices.append(mesh_indices + vertex_offset)
+        vertex_offset += world_positions.shape[0]
+    if not vertices:
+        default = Scene.default()
+        return build_world_scene_buffers(default)
+    return np.concatenate(vertices, axis=0).astype(np.float32), np.concatenate(indices, axis=0).astype(np.uint32)
 
 
 def create_texture(context: RenderContext, spy, key: str, fmt_name: str = "rgba32_float", usage=None):
@@ -591,40 +705,66 @@ def to_slangpy_value(value: Any, spy):
 def pass_from_config(config: Mapping[str, Any]) -> RenderPass:
     pass_type = config["type"]
     name = config["name"]
-    if pass_type == "SceneUploadPass":
-        return SceneUploadPass(name)
-    if pass_type == "SlangFunctionPass":
-        required = {"module", "function", "bindings", "result"}
-        missing = sorted(required - set(config))
-        if missing:
-            raise ValueError(f"SlangFunctionPass `{name}` is missing fields: {', '.join(missing)}")
-        return SlangFunctionPass(
-            name=name,
-            module_path=config["module"],
-            function_name=config["function"],
-            bindings=config["bindings"],
-            result=config["result"],
-            inputs=tuple(config.get("inputs", ())),
-            outputs=tuple(config.get("outputs", (config["result"],))),
-            output_format=config.get("output_format", "rgba32_float"),
-        )
-    if pass_type == "ToneMapPass":
-        return ToneMapPass(name=name, output=config.get("output", "color"))
-    if pass_type == "PresentPass":
-        return PresentPass(name=name)
-    if pass_type == "HardwareRasterPass":
-        return HardwareRasterPass(
-            name=name,
-            shader=config.get("shader", "raster_forward.slang"),
-            output=config.get("output", "color"),
-            color=tuple(config.get("color", (0.1, 0.45, 0.9, 1.0))),
-        )
-    if pass_type == "BuildAccelerationStructurePass":
-        return BuildAccelerationStructurePass(name=name, output=config.get("output", "tlas"))
-    if pass_type == "HardwareDXRPass":
-        return HardwareDXRPass(
-            name=name,
-            shader=config.get("shader", "dxr_pathtrace.slang"),
-            output=config.get("output", "color"),
-        )
+    if pass_type in PASS_REGISTRY:
+        return PASS_REGISTRY[pass_type](config)
     raise ValueError(f"Unknown render pass type `{pass_type}`.")
+
+
+def _scene_upload_from_config(config: Mapping[str, Any]) -> RenderPass:
+    return SceneUploadPass(config["name"])
+
+
+def _slang_function_from_config(config: Mapping[str, Any]) -> RenderPass:
+    name = config["name"]
+    required = {"module", "function", "bindings", "result"}
+    missing = sorted(required - set(config))
+    if missing:
+        raise ValueError(f"SlangFunctionPass `{name}` is missing fields: {', '.join(missing)}")
+    return SlangFunctionPass(
+        name=name,
+        module_path=config["module"],
+        function_name=config["function"],
+        bindings=config["bindings"],
+        result=config["result"],
+        inputs=tuple(config.get("inputs", ())),
+        outputs=tuple(config.get("outputs", (config["result"],))),
+        output_format=config.get("output_format", "rgba32_float"),
+    )
+
+
+def _tone_map_from_config(config: Mapping[str, Any]) -> RenderPass:
+    return ToneMapPass(name=config["name"], output=config.get("output", "color"))
+
+
+def _present_from_config(config: Mapping[str, Any]) -> RenderPass:
+    return PresentPass(name=config["name"])
+
+
+def _hardware_raster_from_config(config: Mapping[str, Any]) -> RenderPass:
+    return HardwareRasterPass(
+        name=config["name"],
+        shader=config.get("shader", "raster_forward.slang"),
+        output=config.get("output", "color"),
+        color=tuple(config.get("color", (0.1, 0.45, 0.9, 1.0))),
+    )
+
+
+def _build_as_from_config(config: Mapping[str, Any]) -> RenderPass:
+    return BuildAccelerationStructurePass(name=config["name"], output=config.get("output", "tlas"))
+
+
+def _hardware_dxr_from_config(config: Mapping[str, Any]) -> RenderPass:
+    return HardwareDXRPass(
+        name=config["name"],
+        shader=config.get("shader", "dxr_pathtrace.slang"),
+        output=config.get("output", "color"),
+    )
+
+
+register_pass_type("SceneUploadPass", _scene_upload_from_config)
+register_pass_type("SlangFunctionPass", _slang_function_from_config)
+register_pass_type("ToneMapPass", _tone_map_from_config)
+register_pass_type("PresentPass", _present_from_config)
+register_pass_type("HardwareRasterPass", _hardware_raster_from_config)
+register_pass_type("BuildAccelerationStructurePass", _build_as_from_config)
+register_pass_type("HardwareDXRPass", _hardware_dxr_from_config)

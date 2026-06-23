@@ -8,6 +8,15 @@ from typing import Callable
 from .device import DeviceConfig, create_slangpy_device, import_slangpy
 
 
+def write_texture_png(texture, spy, path: str | Path) -> None:
+    bitmap = texture.to_bitmap()
+    bitmap.convert(
+        spy.Bitmap.PixelFormat.rgb,
+        spy.Bitmap.ComponentType.uint8,
+        srgb_gamma=True,
+    ).write(str(path))
+
+
 class ELRApp:
     def __init__(
         self,
@@ -75,12 +84,7 @@ class ELRApp:
         self._surface.present()
 
     def screenshot(self, path: str | Path = "screenshot.png") -> None:
-        bitmap = self._output_texture.to_bitmap()
-        bitmap.convert(
-            self._spy.Bitmap.PixelFormat.rgb,
-            self._spy.Bitmap.ComponentType.uint8,
-            srgb_gamma=True,
-        ).write_async(str(path))
+        write_texture_png(self._output_texture, self._spy, path)
 
     def _create_output_texture(self, width: int, height: int):
         return self._device.create_texture(
